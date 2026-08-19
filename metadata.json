@@ -1,0 +1,6 @@
+{
+  "name": "Espaço Terapêutico - Psicologia Clínica",
+  "description": "Site profissional e acolhedor para psicóloga clínica com agendamento via WhatsApp, gestão completa de pacientes e agenda particular, confirmação de consultas, blog e painel administrativo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

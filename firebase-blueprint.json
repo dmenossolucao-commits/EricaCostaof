@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "Administrative patient record for appointments and contact management.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "email": { "type": "string", "maxLength": 200 },
+        "birthDate": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "phone", "status", "createdAt"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "Patient appointment scheduled by the psychologist with unique access code.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "patientPhone": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 20 },
+        "time": { "type": "string", "maxLength": 10 },
+        "durationMinutes": { "type": "number" },
+        "modality": { "type": "string", "enum": ["presencial", "online"] },
+        "status": { "type": "string", "enum": ["agendada", "confirmada", "realizada", "cancelada", "remarcada"] },
+        "accessCode": { "type": "string", "maxLength": 50 },
+        "adminNotes": { "type": "string", "maxLength": 2000 },
+        "publicMessage": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "patientId", "patientName", "date", "time", "modality", "status", "accessCode", "createdAt"]
+    },
+    "PrivateActivity": {
+      "title": "PrivateActivity",
+      "description": "Psychologist private calendar entries (appointments, meetings, personal tasks, study).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 250 },
+        "date": { "type": "string", "maxLength": 20 },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "type": { "type": "string", "enum": ["consulta", "reuniao", "pessoal", "estudo", "evento", "outro"] },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["agendado", "concluido", "cancelado"] },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "title", "date", "startTime", "endTime", "type", "status", "createdAt"]
+    },
+    "PublicAppointment": {
+      "title": "PublicAppointment",
+      "description": "Minimal anonymized projection of appointment confirmation queried strictly by unique random access code.",
+      "type": "object",
+      "properties": {
+        "accessCode": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 20 },
+        "time": { "type": "string", "maxLength": 10 },
+        "durationMinutes": { "type": "number" },
+        "modality": { "type": "string", "enum": ["presencial", "online"] },
+        "status": { "type": "string", "enum": ["agendada", "confirmada", "realizada", "cancelada", "remarcada"] },
+        "psychologistName": { "type": "string", "maxLength": 200 },
+        "psychologistCrp": { "type": "string", "maxLength": 50 },
+        "publicMessage": { "type": "string", "maxLength": 1000 },
+        "locationOrLink": { "type": "string", "maxLength": 500 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["accessCode", "date", "time", "modality", "status", "psychologistName", "psychologistCrp"]
+    }
+  },
+  "firestore": {
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Collection of patient administrative profiles."
+    },
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Collection of patient appointments with private and public attributes."
+    },
+    "/privateActivities/{activityId}": {
+      "schema": "PrivateActivity",
+      "description": "Psychologist's private calendar activities and tasks."
+    },
+    "/publicAppointments/{accessCode}": {
+      "schema": "PublicAppointment",
+      "description": "Sanitized public consultation confirmation keyed by random access code."
+    }
+  }
+}

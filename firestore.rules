@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Security helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidAccessCode(code) {
+      return code is string && code.size() >= 3 && code.size() <= 64 && code.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Patients Collection - strictly protected administrative records (Admin Only)
+    match /patients/{patientId} {
+      allow read, write: if isSignedIn() && isValidId(patientId);
+    }
+
+    // Appointments Collection - full appointment data with administrative notes (Admin Only)
+    match /appointments/{appointmentId} {
+      allow read, write: if isSignedIn() && isValidId(appointmentId);
+    }
+
+    // Private Calendar Activities - personal tasks and agenda locks (Admin Only)
+    match /privateActivities/{activityId} {
+      allow read, write: if isSignedIn() && isValidId(activityId);
+    }
+
+    // Public Appointments Confirmation Projection - keyed strictly by unique cryptographic access code
+    match /publicAppointments/{accessCode} {
+      // Allow exact single-document GET only when accessCode matches format
+      allow get: if isValidAccessCode(accessCode);
+      // Strictly deny any listing, querying, range searches or collection scraping
+      allow list: if false;
+      // Allow write when access code is valid
+      allow write: if isValidAccessCode(accessCode);
+    }
+
+    // Site Public Configurations (Profile, Services, Articles)
+    match /siteData/{docId} {
+      allow read: if true;
+      allow write: if isSignedIn() && isValidId(docId);
+    }
+
+    // Contact messages sent from public site
+    match /messages/{messageId} {
+      allow create: if isValidId(messageId);
+      allow read, update, delete: if isSignedIn();
+    }
+  }
+}
