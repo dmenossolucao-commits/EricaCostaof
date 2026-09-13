@@ -12,6 +12,27 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isNotAnonymous() {
+      return isSignedIn() &&
+        request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isAuthorizedAdmin() {
+      return isSignedIn() &&
+        isNotAnonymous() &&
+        isEmailVerified() &&
+        request.auth.token.email != null &&
+        request.auth.token.email in [
+          'dmenossolucao@gmail.com',
+          'ericacostapsicologa7@gmail.com'
+        ];
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -20,41 +41,60 @@ service cloud.firestore {
       return code is string && code.size() >= 3 && code.size() <= 64 && code.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // Patients Collection - strictly protected administrative records (Admin Only)
+    // =========================================================================
+    // SEGREGATED PUBLIC DATA (Profile, Services, Blog, FAQ, Testimonials)
+    // Read: Public visitors and patients
+    // Write: Authorized Administrators Only
+    // =========================================================================
+    match /publicData/{docId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin() && isValidId(docId);
+    }
+
+    // =========================================================================
+    // SEGREGATED PRIVATE ADMIN DATA (Patients, Private Agenda, Full Appointments, Admin Notes)
+    // Read & Write: Authorized Administrators Only
+    // =========================================================================
+    match /adminData/{docId} {
+      allow read, write: if isAuthorizedAdmin() && isValidId(docId);
+    }
+
+    // Patients Collection - strictly protected clinical records (Admin Only)
     match /patients/{patientId} {
-      allow read, write: if isSignedIn() && isValidId(patientId);
+      allow read, write: if isAuthorizedAdmin() && isValidId(patientId);
     }
 
     // Appointments Collection - full appointment data with administrative notes (Admin Only)
     match /appointments/{appointmentId} {
-      allow read, write: if isSignedIn() && isValidId(appointmentId);
+      allow read, write: if isAuthorizedAdmin() && isValidId(appointmentId);
     }
 
     // Private Calendar Activities - personal tasks and agenda locks (Admin Only)
     match /privateActivities/{activityId} {
-      allow read, write: if isSignedIn() && isValidId(activityId);
+      allow read, write: if isAuthorizedAdmin() && isValidId(activityId);
     }
 
     // Public Appointments Confirmation Projection - keyed strictly by unique cryptographic access code
+    // Patient can ONLY perform exact GET for their own appointment code
+    // Listing/scraping is strictly forbidden
+    // Creation/Update is performed only by authorized administrator
     match /publicAppointments/{accessCode} {
-      // Allow exact single-document GET only when accessCode matches format
       allow get: if isValidAccessCode(accessCode);
-      // Strictly deny any listing, querying, range searches or collection scraping
       allow list: if false;
-      // Allow write when access code is valid
-      allow write: if isValidAccessCode(accessCode);
-    }
-
-    // Site Public Configurations (Profile, Services, Articles)
-    match /siteData/{docId} {
-      allow read: if true;
-      allow write: if isSignedIn() && isValidId(docId);
+      allow write: if isAuthorizedAdmin() && isValidAccessCode(accessCode);
     }
 
     // Contact messages sent from public site
+    // Create: Allowed for visitors
+    // Read, update, delete: Authorized Administrators Only
     match /messages/{messageId} {
       allow create: if isValidId(messageId);
-      allow read, update, delete: if isSignedIn();
+      allow read, update, delete: if isAuthorizedAdmin();
+    }
+
+    // Legacy siteData compatibility during transition (Admin Only)
+    match /siteData/{docId} {
+      allow read, write: if isAuthorizedAdmin() && isValidId(docId);
     }
   }
 }

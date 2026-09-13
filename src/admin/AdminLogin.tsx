@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSite } from '../context/SiteContext';
+import { isAuthorizedAdminEmail } from '../types';
 import {
   Lock,
   Mail,
@@ -75,13 +76,19 @@ export const AdminLogin: React.FC = () => {
     e.preventDefault();
     clearMessages();
 
-    if (!email || !password) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
       setErrorMessage('Por favor, informe seu e-mail e senha.');
       return;
     }
 
+    if (!isAuthorizedAdminEmail(cleanEmail)) {
+      setErrorMessage('Acesso não autorizado: este e-mail não possui permissão administrativa.');
+      return;
+    }
+
     setLoading(true);
-    const res = await loginAdminWithEmail(email, password);
+    const res = await loginAdminWithEmail(cleanEmail, password);
     setLoading(false);
 
     if (!res.success) {
@@ -99,8 +106,16 @@ export const AdminLogin: React.FC = () => {
     e.preventDefault();
     clearMessages();
 
-    if (!email || !password || !confirmPassword) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password || !confirmPassword) {
       setErrorMessage('Preencha todos os campos obrigatórios.');
+      return;
+    }
+
+    if (!isAuthorizedAdminEmail(cleanEmail)) {
+      setErrorMessage(
+        'Este e-mail não possui autorização prévia para gerenciar este consultório. O cadastro é restrito aos administradores autorizados.'
+      );
       return;
     }
 
@@ -115,7 +130,7 @@ export const AdminLogin: React.FC = () => {
     }
 
     setLoading(true);
-    const res = await registerNewAdmin(email, password);
+    const res = await registerNewAdmin(cleanEmail, password);
     setLoading(false);
 
     if (res.success) {
@@ -131,13 +146,19 @@ export const AdminLogin: React.FC = () => {
     e.preventDefault();
     clearMessages();
 
-    if (!email) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
       setErrorMessage('Por favor, informe seu e-mail administrativo.');
       return;
     }
 
+    if (!isAuthorizedAdminEmail(cleanEmail)) {
+      setErrorMessage('E-mail não autorizado para recuperação de acesso administrativo.');
+      return;
+    }
+
     setLoading(true);
-    const res = await sendPasswordReset(email);
+    const res = await sendPasswordReset(cleanEmail);
     setLoading(false);
 
     if (res.success) {
@@ -482,6 +503,13 @@ export const AdminLogin: React.FC = () => {
               <p className="text-xs sm:text-sm text-[#5A4535] leading-relaxed">
                 Configure seu acesso seguro gerenciado pelo Firebase Authentication.
               </p>
+            </div>
+
+            <div className="mb-4 p-3 rounded-xl bg-amber-50/70 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <span>
+                <strong>Acesso Restrito:</strong> O cadastro de novos administradores exige pré-autorização institucional da clínica. Apenas e-mails na lista autorizada podem se registrar.
+              </span>
             </div>
 
             {errorMessage && (

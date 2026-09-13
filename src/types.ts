@@ -270,7 +270,22 @@ export interface PublicAppointmentView {
   updatedAt?: string;
 }
 
-export interface SiteData {
+// Authorized Administrative Accounts Allowlist (Single Source of Truth)
+export const AUTHORIZED_ADMIN_EMAILS = [
+  'dmenossolucao@gmail.com',
+  'ericacostapsicologa7@gmail.com',
+] as const;
+
+export function isAuthorizedAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  return AUTHORIZED_ADMIN_EMAILS.some((adm) => adm.toLowerCase() === normalized);
+}
+
+/**
+ * 100% Public Site Data (Read by visitors, zero patient or private data)
+ */
+export interface PublicSiteData {
   profile: PsychologistProfile;
   config: SiteConfig;
   specialties: Specialty[];
@@ -279,9 +294,23 @@ export interface SiteData {
   faq: FAQItem[];
   testimonials: Testimonial[];
   posts: BlogPost[];
+  lastUpdated: string;
+}
+
+/**
+ * 100% Private Administrative Data (Accessible strictly to verified allowlisted admin)
+ */
+export interface AdminPrivateData {
+  patients: Patient[];
+  appointments: Appointment[];
+  privateActivities: PrivateActivity[];
+  messages: ContactMessage[];
+  lastUpdated: string;
+}
+
+export interface SiteData extends PublicSiteData {
   messages: ContactMessage[];
   patients: Patient[];
   appointments: Appointment[];
   privateActivities: PrivateActivity[];
-  lastUpdated: string;
 }

@@ -30,7 +30,18 @@ import {
   Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Patient, Appointment, PrivateActivity, PublicAppointmentView, SiteData } from '../types';
+import {
+  Patient,
+  Appointment,
+  PrivateActivity,
+  PublicAppointmentView,
+  ContactMessage,
+  SiteData,
+  PublicSiteData,
+  AdminPrivateData,
+  isAuthorizedAdminEmail,
+  AUTHORIZED_ADMIN_EMAILS,
+} from '../types';
 
 export enum OperationType {
   CREATE = 'create',
@@ -71,7 +82,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const db: Firestore = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db: Firestore =
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+    ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+    : getFirestore(app);
 export const auth = getAuth(app);
 
 // Convert Firebase Auth error codes to user-friendly Portuguese messages
@@ -92,8 +106,12 @@ export function getFriendlyAuthErrorMessage(error: any): string {
       return 'A senha deve conter no mínimo 6 caracteres.';
     case 'auth/too-many-requests':
       return 'Muitas tentativas consecutivas detectadas. Por segurança, aguarde alguns instantes antes de tentar novamente.';
+    case 'auth/unauthorized-domain':
+      return 'Domínio não autorizado no Firebase. Adicione o domínio (erica-costaof.vercel.app) no Firebase Console em Authentication > Configurações > Domínios autorizados.';
+    case 'auth/operation-not-allowed':
+      return 'O provedor de E-mail/Senha precisa ser ativado no Firebase Console (Authentication > Sign-in method > E-mail/senha).';
     case 'auth/network-request-failed':
-      return 'Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.';
+      return 'Não foi possível conectar aos servidores do Firebase. Verifique sua conexão e tente novamente.';
     case 'auth/requires-recent-login':
       return 'Por segurança, confirme sua senha atual antes de alterar suas credenciais.';
     case 'auth/user-disabled':
@@ -123,16 +141,24 @@ export async function ensureAuthUser(): Promise<User | null> {
   }
 }
 
-// Administrative Login with Email and Password
+// Administrative Login with Email and Password (Strict Allowlist Validation)
 export async function loginWithEmailAndPassword(email: string, pass: string): Promise<User> {
-  const cleanEmail = email.trim();
+  const cleanEmail = email.trim().toLowerCase();
+  if (!isAuthorizedAdminEmail(cleanEmail)) {
+    throw new Error('Acesso não autorizado: este e-mail não possui permissão administrativa.');
+  }
   const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
   return cred.user;
 }
 
-// Create new administrator account and dispatch verification email
+// Create new administrator account and dispatch verification email (Strict Allowlist Validation)
 export async function registerAdminWithEmailAndPassword(email: string, pass: string): Promise<User> {
-  const cleanEmail = email.trim();
+  const cleanEmail = email.trim().toLowerCase();
+  if (!isAuthorizedAdminEmail(cleanEmail)) {
+    throw new Error(
+      'Cadastro não autorizado: este e-mail não possui permissão prévia para gerenciar este consultório.'
+    );
+  }
   const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
   try {
     await sendEmailVerification(cred.user);
@@ -147,9 +173,12 @@ export async function sendEmailVerificationToUser(user: User): Promise<void> {
   await sendEmailVerification(user);
 }
 
-// Send password reset email
+// Send password reset email (Strict Allowlist Validation)
 export async function sendAdminPasswordReset(email: string): Promise<void> {
-  const cleanEmail = email.trim();
+  const cleanEmail = email.trim().toLowerCase();
+  if (!isAuthorizedAdminEmail(cleanEmail)) {
+    throw new Error('E-mail não autorizado para redefinição administrativa.');
+  }
   await sendPasswordResetEmail(auth, cleanEmail);
 }
 
@@ -198,11 +227,14 @@ export async function testFirebaseConnection(): Promise<boolean> {
 
 // Collections references
 export const COLLECTIONS = {
+  PUBLIC_DATA: 'publicData',
+  ADMIN_DATA: 'adminData',
   PATIENTS: 'patients',
   APPOINTMENTS: 'appointments',
   PRIVATE_ACTIVITIES: 'privateActivities',
   PUBLIC_APPOINTMENTS: 'publicAppointments',
-  SITE_DATA: 'siteData',
+  MESSAGES: 'messages',
+  SITE_DATA: 'siteData', // Legacy compatibility fallback
 };
 
 // ======================== PATIENT SERVICES ========================
@@ -370,53 +402,222 @@ export async function savePublicProjectionRecord(
 ): Promise<void> {
   const cleanCode = normalizeAccessCode(accessCode);
   if (!cleanCode) return;
+
+  // Strict sanitization: ensure ONLY public appointment fields are written
+  // Never leak patientPhone, patientEmail, adminNotes or internal data
+  const sanitizedProjection: PublicAppointmentView = {
+    accessCode: cleanCode,
+    date: projection.date,
+    time: projection.time,
+    durationMinutes: projection.durationMinutes,
+    modality: projection.modality,
+    status: projection.status,
+    psychologistName: projection.psychologistName || '',
+    psychologistCrp: projection.psychologistCrp || '',
+    publicMessage: projection.publicMessage || '',
+    locationOrLink: projection.locationOrLink || '',
+    updatedAt: projection.updatedAt || new Date().toISOString(),
+  };
+
   try {
-    await setDoc(doc(db, COLLECTIONS.PUBLIC_APPOINTMENTS, cleanCode), projection, { merge: true });
+    await setDoc(doc(db, COLLECTIONS.PUBLIC_APPOINTMENTS, cleanCode), sanitizedProjection, { merge: true });
   } catch (e) {
     console.warn('Save public projection notice:', e);
   }
 }
 
-// ======================== SITE DATA CLOUD PERSISTENCE ========================
+// ======================== CONTACT MESSAGES ========================
 
-export async function saveSiteDataToCloud(siteData: SiteData): Promise<void> {
-  const path = `${COLLECTIONS.SITE_DATA}/current`;
+export async function createMessageRecord(message: ContactMessage): Promise<void> {
   try {
-    await setDoc(doc(db, COLLECTIONS.SITE_DATA, 'current'), siteData, { merge: true });
-  } catch (error) {
-    console.warn('Sync notice: could not save siteData to cloud:', error);
+    await setDoc(doc(db, COLLECTIONS.MESSAGES, message.id), message);
+  } catch (e) {
+    console.warn('Save contact message notice:', e);
   }
 }
 
-export async function getSiteDataFromCloud(): Promise<SiteData | null> {
+// ======================== PUBLIC DATA CLOUD PERSISTENCE ========================
+
+export async function savePublicDataToCloud(publicData: PublicSiteData): Promise<void> {
+  const path = `${COLLECTIONS.PUBLIC_DATA}/current`;
   try {
-    const snap = await getDoc(doc(db, COLLECTIONS.SITE_DATA, 'current'));
+    await setDoc(doc(db, COLLECTIONS.PUBLIC_DATA, 'current'), publicData, { merge: true });
+  } catch (error) {
+    console.warn('Sync notice: could not save publicData to cloud:', error);
+  }
+}
+
+export async function getPublicDataFromCloud(): Promise<PublicSiteData | null> {
+  try {
+    // 1. Try new segregated publicData collection
+    const snap = await getDoc(doc(db, COLLECTIONS.PUBLIC_DATA, 'current'));
     if (snap.exists()) {
-      return snap.data() as SiteData;
+      return snap.data() as PublicSiteData;
     }
   } catch (error) {
-    console.warn('Sync notice: could not read siteData from cloud:', error);
+    console.warn('Sync notice: could not read publicData from cloud:', error);
   }
+
+  // Fallback: if publicData/current is not yet created, read legacy public fields from siteData/current
+  try {
+    const legacySnap = await getDoc(doc(db, COLLECTIONS.SITE_DATA, 'current'));
+    if (legacySnap.exists()) {
+      const data = legacySnap.data() as any;
+      if (data.profile && data.config) {
+        const publicSlice: PublicSiteData = {
+          profile: data.profile,
+          config: data.config,
+          specialties: data.specialties || [],
+          attendance: data.attendance,
+          steps: data.steps || [],
+          faq: data.faq || [],
+          testimonials: data.testimonials || [],
+          posts: data.posts || [],
+          lastUpdated: data.lastUpdated || new Date().toISOString(),
+        };
+        return publicSlice;
+      }
+    }
+  } catch {
+    // Legacy fallback silent
+  }
+
   return null;
 }
 
-export function subscribeSiteDataFromCloud(onData: (data: SiteData) => void): () => void {
+export function subscribePublicDataFromCloud(onData: (data: PublicSiteData) => void): () => void {
   try {
     const unsub = onSnapshot(
-      doc(db, COLLECTIONS.SITE_DATA, 'current'),
+      doc(db, COLLECTIONS.PUBLIC_DATA, 'current'),
       (snap) => {
         if (snap.exists()) {
-          onData(snap.data() as SiteData);
+          onData(snap.data() as PublicSiteData);
         }
       },
       (error) => {
-        console.warn('Sync notice: siteData snapshot error:', error);
+        console.warn('Sync notice: publicData snapshot error:', error);
       }
     );
     return unsub;
   } catch (e) {
-    console.warn('Sync notice: failed to attach snapshot listener:', e);
+    console.warn('Sync notice: failed to attach publicData snapshot listener:', e);
     return () => {};
   }
+}
+
+// ======================== ADMIN PRIVATE DATA CLOUD PERSISTENCE ========================
+
+export async function saveAdminDataToCloud(adminData: AdminPrivateData): Promise<void> {
+  const path = `${COLLECTIONS.ADMIN_DATA}/current`;
+  try {
+    await setDoc(doc(db, COLLECTIONS.ADMIN_DATA, 'current'), adminData, { merge: true });
+  } catch (error) {
+    console.warn('Sync notice: could not save adminData to cloud:', error);
+  }
+}
+
+export async function getAdminDataFromCloud(): Promise<AdminPrivateData | null> {
+  try {
+    // 1. Try dedicated private adminData collection
+    const snap = await getDoc(doc(db, COLLECTIONS.ADMIN_DATA, 'current'));
+    if (snap.exists()) {
+      return snap.data() as AdminPrivateData;
+    }
+  } catch (error) {
+    console.warn('Sync notice: could not read adminData from cloud:', error);
+  }
+
+  // Fallback: if adminData/current is not yet created, read legacy private fields from siteData/current
+  try {
+    const legacySnap = await getDoc(doc(db, COLLECTIONS.SITE_DATA, 'current'));
+    if (legacySnap.exists()) {
+      const data = legacySnap.data() as any;
+      if (data.patients || data.appointments || data.privateActivities || data.messages) {
+        const privateSlice: AdminPrivateData = {
+          patients: data.patients || [],
+          appointments: data.appointments || [],
+          privateActivities: data.privateActivities || [],
+          messages: data.messages || [],
+          lastUpdated: data.lastUpdated || new Date().toISOString(),
+        };
+        return privateSlice;
+      }
+    }
+  } catch {
+    // Legacy fallback silent
+  }
+
+  return null;
+}
+
+export function subscribeAdminDataFromCloud(onData: (data: AdminPrivateData) => void): () => void {
+  try {
+    const unsub = onSnapshot(
+      doc(db, COLLECTIONS.ADMIN_DATA, 'current'),
+      (snap) => {
+        if (snap.exists()) {
+          onData(snap.data() as AdminPrivateData);
+        }
+      },
+      (error) => {
+        console.warn('Sync notice: adminData snapshot error:', error);
+      }
+    );
+    return unsub;
+  } catch (e) {
+    console.warn('Sync notice: failed to attach adminData snapshot listener:', e);
+    return () => {};
+  }
+}
+
+// ======================== LEGACY SITE DATA COMPATIBILITY ========================
+
+export async function saveSiteDataToCloud(siteData: SiteData): Promise<void> {
+  try {
+    // Dispatch to both publicData and adminData
+    const publicSlice: PublicSiteData = {
+      profile: siteData.profile,
+      config: siteData.config,
+      specialties: siteData.specialties,
+      attendance: siteData.attendance,
+      steps: siteData.steps,
+      faq: siteData.faq,
+      testimonials: siteData.testimonials,
+      posts: siteData.posts,
+      lastUpdated: siteData.lastUpdated,
+    };
+    const privateSlice: AdminPrivateData = {
+      patients: siteData.patients,
+      appointments: siteData.appointments,
+      privateActivities: siteData.privateActivities,
+      messages: siteData.messages,
+      lastUpdated: siteData.lastUpdated,
+    };
+
+    await Promise.all([
+      savePublicDataToCloud(publicSlice),
+      saveAdminDataToCloud(privateSlice),
+    ]);
+  } catch (error) {
+    console.warn('Sync notice: could not save unified siteData to cloud:', error);
+  }
+}
+
+export async function getSiteDataFromCloud(): Promise<SiteData | null> {
+  const [publicData, adminData] = await Promise.all([
+    getPublicDataFromCloud(),
+    getAdminDataFromCloud(),
+  ]);
+
+  if (!publicData && !adminData) return null;
+
+  return {
+    ...(publicData as any),
+    patients: adminData?.patients || [],
+    appointments: adminData?.appointments || [],
+    privateActivities: adminData?.privateActivities || [],
+    messages: adminData?.messages || [],
+    lastUpdated: adminData?.lastUpdated || publicData?.lastUpdated || new Date().toISOString(),
+  } as SiteData;
 }
 

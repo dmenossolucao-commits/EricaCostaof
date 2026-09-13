@@ -16,6 +16,10 @@ import {
   Appointment,
   PrivateActivity,
   PublicAppointmentView,
+  PublicSiteData,
+  AdminPrivateData,
+  isAuthorizedAdminEmail,
+  AUTHORIZED_ADMIN_EMAILS,
 } from '../types';
 import { INITIAL_SITE_DATA } from '../data/initialData';
 import {
@@ -39,15 +43,20 @@ import {
   createPrivateActivityRecord,
   updatePrivateActivityRecord,
   deletePrivateActivityRecord,
+  createMessageRecord,
   lookupPublicAppointmentByCode,
   normalizeAccessCode,
   savePublicProjectionRecord,
-  saveSiteDataToCloud,
-  getSiteDataFromCloud,
-  subscribeSiteDataFromCloud,
+  savePublicDataToCloud,
+  getPublicDataFromCloud,
+  subscribePublicDataFromCloud,
+  saveAdminDataToCloud,
+  getAdminDataFromCloud,
+  subscribeAdminDataFromCloud,
 } from '../lib/firebase';
 
-const STORAGE_KEY = 'psicologia_site_data_v2';
+const PUBLIC_STORAGE_KEY = 'psicologia_public_site_data_v3';
+const SESSION_ADMIN_DATA_KEY = 'psico_admin_private_data_v2';
 const SESSION_STORAGE_KEY = 'psico_admin_session_start_v2';
 export const MAX_SESSION_SECONDS = 3600; // 1 hour absolute maximum
 export const WARNING_THRESHOLD_SECONDS = 300; // 5 minutes
@@ -214,22 +223,44 @@ const SiteContext = createContext<SiteContextType | undefined>(undefined);
 
 export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [data, setData] = useState<SiteData>(() => {
+    // 1. Erase any legacy insecure cache if present
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem('psicologia_site_data_v2');
+      }
+    } catch {}
+
+    // 2. Load strictly public data from localStorage
+    let publicSlice: Partial<PublicSiteData> = {};
+    try {
+      const saved = localStorage.getItem(PUBLIC_STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          ...INITIAL_SITE_DATA,
-          ...parsed,
-          patients: parsed.patients || INITIAL_SITE_DATA.patients || [],
-          appointments: parsed.appointments || INITIAL_SITE_DATA.appointments || [],
-          privateActivities: parsed.privateActivities || INITIAL_SITE_DATA.privateActivities || [],
-        };
+        publicSlice = JSON.parse(saved);
       }
     } catch (e) {
-      console.warn('Erro ao carregar dados locais, usando padrão:', e);
+      console.warn('Erro ao carregar dados públicos locais:', e);
     }
-    return INITIAL_SITE_DATA;
+
+    // 3. Load private data only if already in active authenticated session
+    let privateSlice: Partial<AdminPrivateData> = {};
+    try {
+      const savedPrivate = sessionStorage.getItem(SESSION_ADMIN_DATA_KEY);
+      if (savedPrivate) {
+        privateSlice = JSON.parse(savedPrivate);
+      }
+    } catch {}
+
+    return {
+      ...INITIAL_SITE_DATA,
+      ...publicSlice,
+      profile: { ...INITIAL_SITE_DATA.profile, ...(publicSlice.profile || {}) },
+      config: { ...INITIAL_SITE_DATA.config, ...(publicSlice.config || {}) },
+      // Patients, appointments, private activities and messages are strictly protected
+      patients: privateSlice.patients || [],
+      appointments: privateSlice.appointments || [],
+      privateActivities: privateSlice.privateActivities || [],
+      messages: privateSlice.messages || [],
+    };
   });
 
   // Real Firebase Auth state
@@ -269,7 +300,7 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Listen to Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && !user.isAnonymous) {
+      if (user && !user.isAnonymous && isAuthorizedAdminEmail(user.email)) {
         setAdminUser(user);
         if (user.emailVerified) {
           const savedStart = sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -282,6 +313,7 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         setAdminUser(null);
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        sessionStorage.removeItem(SESSION_ADMIN_DATA_KEY);
         setSessionStartTime(null);
         setIsSessionWarningOpen(false);
       }
@@ -307,9 +339,17 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSessionRemainingSeconds(0);
         setIsSessionWarningOpen(false);
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        sessionStorage.removeItem(SESSION_ADMIN_DATA_KEY);
         setSessionStartTime(null);
         logoutAdminUser().catch(() => {});
         setAdminUser(null);
+        setData((prev) => ({
+          ...prev,
+          patients: [],
+          appointments: [],
+          privateActivities: [],
+          messages: [],
+        }));
         setCurrentRoute('admin');
         window.location.hash = 'admin';
         showToast('Sua sessão expirou por segurança. Faça login novamente.', 'error');
@@ -328,39 +368,114 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(interval);
   }, [adminUser, sessionStartTime]);
 
-  // Is logged in strictly when Firebase user is present, email is verified, and session has not expired
+  // Is logged in strictly when Firebase user is present, not anonymous, authorized in allowlist, email verified, and session valid
   const isAdminLoggedIn = Boolean(
-    adminUser && !adminUser.isAnonymous && adminUser.emailVerified && sessionRemainingSeconds > 0
+    adminUser &&
+    !adminUser.isAnonymous &&
+    isAuthorizedAdminEmail(adminUser.email) &&
+    adminUser.emailVerified &&
+    sessionRemainingSeconds > 0
   );
   const isAdmin = isAdminLoggedIn;
 
-  // Initialize Firebase and synchronize SiteData with Cloud Firestore
+  // Initialize Firebase connection and synchronize Public SiteData with Cloud Firestore
   useEffect(() => {
     let isSubscribed = true;
 
-    const initSyncAndLoad = async () => {
+    const initPublicSync = async () => {
       await testFirebaseConnection();
       await ensureAuthUser();
 
       try {
-        const cloudData = await getSiteDataFromCloud();
-        if (cloudData && isSubscribed) {
+        const cloudPublic = await getPublicDataFromCloud();
+        if (cloudPublic && isSubscribed) {
           setData((prev) => ({
-            ...INITIAL_SITE_DATA,
             ...prev,
-            ...cloudData,
-            profile: { ...INITIAL_SITE_DATA.profile, ...(prev.profile || {}), ...(cloudData.profile || {}) },
-            config: { ...INITIAL_SITE_DATA.config, ...(prev.config || {}), ...(cloudData.config || {}) },
-            patients: cloudData.patients || prev.patients || [],
-            appointments: cloudData.appointments || prev.appointments || [],
-            privateActivities: cloudData.privateActivities || prev.privateActivities || [],
+            ...cloudPublic,
+            profile: { ...INITIAL_SITE_DATA.profile, ...(prev.profile || {}), ...(cloudPublic.profile || {}) },
+            config: { ...INITIAL_SITE_DATA.config, ...(prev.config || {}), ...(cloudPublic.config || {}) },
+            specialties: cloudPublic.specialties || prev.specialties,
+            attendance: cloudPublic.attendance || prev.attendance,
+            steps: cloudPublic.steps || prev.steps,
+            faq: cloudPublic.faq || prev.faq,
+            testimonials: cloudPublic.testimonials || prev.testimonials,
+            posts: cloudPublic.posts || prev.posts,
+            lastUpdated: cloudPublic.lastUpdated || prev.lastUpdated,
           }));
         }
       } catch (err) {
-        console.warn('Sync notice: initial siteData load:', err);
+        console.warn('Sync notice: public data load error:', err);
+      }
+    };
+
+    initPublicSync();
+
+    // Subscribe to cloud Firestore publicData snapshot for real-time visitor updates
+    const unsubscribeSnapshot = subscribePublicDataFromCloud((cloudPublic) => {
+      if (!isSubscribed || !cloudPublic) return;
+      setData((prev) => {
+        if (cloudPublic.lastUpdated && cloudPublic.lastUpdated === prev.lastUpdated) {
+          return prev;
+        }
+        return {
+          ...prev,
+          ...cloudPublic,
+          profile: { ...INITIAL_SITE_DATA.profile, ...(prev.profile || {}), ...(cloudPublic.profile || {}) },
+          config: { ...INITIAL_SITE_DATA.config, ...(prev.config || {}), ...(cloudPublic.config || {}) },
+          specialties: cloudPublic.specialties || prev.specialties,
+          attendance: cloudPublic.attendance || prev.attendance,
+          steps: cloudPublic.steps || prev.steps,
+          faq: cloudPublic.faq || prev.faq,
+          testimonials: cloudPublic.testimonials || prev.testimonials,
+          posts: cloudPublic.posts || prev.posts,
+          lastUpdated: cloudPublic.lastUpdated || prev.lastUpdated,
+        };
+      });
+    });
+
+    return () => {
+      isSubscribed = false;
+      unsubscribeSnapshot();
+    };
+  }, []);
+
+  // Synchronize Private Admin Data (patients, appointments, private activities, messages)
+  // ONLY when user is authenticated as an authorized administrator
+  useEffect(() => {
+    if (!isAdminLoggedIn) {
+      // Clear private data from state and session when logged out
+      setData((prev) => ({
+        ...prev,
+        patients: [],
+        appointments: [],
+        privateActivities: [],
+        messages: [],
+      }));
+      try {
+        sessionStorage.removeItem(SESSION_ADMIN_DATA_KEY);
+      } catch {}
+      return;
+    }
+
+    let isSubscribed = true;
+
+    const loadAdminData = async () => {
+      try {
+        const cloudAdmin = await getAdminDataFromCloud();
+        if (cloudAdmin && isSubscribed) {
+          setData((prev) => ({
+            ...prev,
+            patients: cloudAdmin.patients || prev.patients || [],
+            appointments: cloudAdmin.appointments || prev.appointments || [],
+            privateActivities: cloudAdmin.privateActivities || prev.privateActivities || [],
+            messages: cloudAdmin.messages || prev.messages || [],
+          }));
+        }
+      } catch (err) {
+        console.warn('Sync notice: admin private data load:', err);
       }
 
-      // Proactively ensure public projections exist in cloud for all appointments
+      // Proactively ensure sanitized public projections exist in cloud for all appointments
       if (data.appointments && data.appointments.length > 0) {
         for (const apt of data.appointments) {
           if (apt.accessCode) {
@@ -386,102 +501,136 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    initSyncAndLoad();
+    loadAdminData();
 
-    // Subscribe to cloud Firestore snapshot for multi-device sync
-    const unsubscribeSnapshot = subscribeSiteDataFromCloud((cloudData) => {
-      if (!isSubscribed || !cloudData) return;
+    // Subscribe to cloud Firestore adminData snapshot for real-time admin sync
+    const unsubscribeAdmin = subscribeAdminDataFromCloud((cloudAdmin) => {
+      if (!isSubscribed || !cloudAdmin) return;
       setData((prev) => {
-        if (cloudData.lastUpdated && cloudData.lastUpdated === prev.lastUpdated) {
+        if (cloudAdmin.lastUpdated && cloudAdmin.lastUpdated === prev.lastUpdated) {
           return prev;
         }
         return {
-          ...INITIAL_SITE_DATA,
           ...prev,
-          ...cloudData,
-          profile: { ...INITIAL_SITE_DATA.profile, ...(prev.profile || {}), ...(cloudData.profile || {}) },
-          config: { ...INITIAL_SITE_DATA.config, ...(prev.config || {}), ...(cloudData.config || {}) },
-          patients: cloudData.patients || prev.patients || [],
-          appointments: cloudData.appointments || prev.appointments || [],
-          privateActivities: cloudData.privateActivities || prev.privateActivities || [],
+          patients: cloudAdmin.patients || prev.patients || [],
+          appointments: cloudAdmin.appointments || prev.appointments || [],
+          privateActivities: cloudAdmin.privateActivities || prev.privateActivities || [],
+          messages: cloudAdmin.messages || prev.messages || [],
         };
       });
     });
 
     return () => {
       isSubscribed = false;
-      unsubscribeSnapshot();
+      unsubscribeAdmin();
     };
-  }, []);
+  }, [isAdminLoggedIn]);
 
-  // Persist data locally and to Cloud Firestore on change
+  // Persist data: strictly segregated
+  // Public data -> localStorage (and cloud if admin)
+  // Private data -> sessionStorage (and cloud only if admin)
   useEffect(() => {
+    // 1. Separate public slice
+    const publicSlice: PublicSiteData = {
+      profile: data.profile,
+      config: data.config,
+      specialties: data.specialties,
+      attendance: data.attendance,
+      steps: data.steps,
+      faq: data.faq,
+      testimonials: data.testimonials,
+      posts: data.posts,
+      lastUpdated: data.lastUpdated,
+    };
+
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(PUBLIC_STORAGE_KEY, JSON.stringify(publicSlice));
+      // Always purge old unified key
+      localStorage.removeItem('psicologia_site_data_v2');
     } catch (e) {
-      console.error('Erro ao salvar no localStorage:', e);
+      console.error('Erro ao salvar dados públicos no localStorage:', e);
     }
 
-    const timer = setTimeout(() => {
-      saveSiteDataToCloud(data).catch((e) => {
-        console.warn('Cloud save notice:', e);
-      });
-    }, 400);
+    // 2. Private data & Cloud synchronization (Admin only)
+    if (isAdminLoggedIn) {
+      const privateSlice: AdminPrivateData = {
+        patients: data.patients || [],
+        appointments: data.appointments || [],
+        privateActivities: data.privateActivities || [],
+        messages: data.messages || [],
+        lastUpdated: data.lastUpdated,
+      };
 
-    return () => clearTimeout(timer);
-  }, [data]);
+      try {
+        sessionStorage.setItem(SESSION_ADMIN_DATA_KEY, JSON.stringify(privateSlice));
+      } catch {}
+
+      const timer = setTimeout(() => {
+        savePublicDataToCloud(publicSlice).catch((e) => {
+          console.warn('Public cloud save notice:', e);
+        });
+        saveAdminDataToCloud(privateSlice).catch((e) => {
+          console.warn('Admin cloud save notice:', e);
+        });
+      }, 400);
+
+      return () => clearTimeout(timer);
+    }
+  }, [data, isAdminLoggedIn]);
 
   // Handle URL hash and pathname changes for friendly navigation
   useEffect(() => {
     const handleHashAndPathChange = () => {
-      const pathname = (window.location.pathname || '').toLowerCase();
+      const pathname = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
       const hash = (window.location.hash || '').replace(/^#\/?/, '').toLowerCase();
+
+      // Determine target route from hash first, then pathname
+      const target = hash || pathname.replace(/^\//, '');
 
       if (
         pathname === '/admin' ||
-        pathname === '/admin/' ||
-        hash === 'admin' ||
-        hash.startsWith('admin') ||
-        hash.startsWith('/admin')
+        target === 'admin' ||
+        target.startsWith('admin/') ||
+        target.startsWith('admin')
       ) {
         setCurrentRoute('admin');
         return;
       }
-      if (hash.startsWith('blog/')) {
-        const slug = hash.replace('blog/', '');
+      if (target.startsWith('blog/')) {
+        const slug = target.replace('blog/', '');
         setCurrentRoute('article');
         setCurrentArticleSlug(slug);
         setRouteParams(slug);
-      } else if (hash.startsWith('especialidade/')) {
-        const specId = hash.replace('especialidade/', '');
+      } else if (target.startsWith('especialidade/')) {
+        const specId = target.replace('especialidade/', '');
         setCurrentRoute('specialty-detail');
         setSelectedSpecialtyId(specId);
         setRouteParams(specId);
-      } else if (hash.startsWith('consulta/') || hash.startsWith('consultar/')) {
-        const rawCode = hash.replace('consulta/', '').replace('consultar/', '');
+      } else if (target.startsWith('consulta/') || target.startsWith('consultar/')) {
+        const rawCode = target.replace('consulta/', '').replace('consultar/', '');
         const code = normalizeAccessCode(decodeURIComponent(rawCode));
         setCurrentRoute('consultation');
         setRouteParams(code);
-      } else if (hash === 'consulta' || hash === 'consultar') {
+      } else if (target === 'consulta' || target === 'consultar') {
         setCurrentRoute('consultation');
         setRouteParams(null);
-      } else if (hash === 'blog') {
+      } else if (target === 'blog') {
         setCurrentRoute('blog');
-      } else if (hash === 'privacidade') {
+      } else if (target === 'privacidade') {
         setCurrentRoute('privacy');
-      } else if (hash === 'termos') {
+      } else if (target === 'termos') {
         setCurrentRoute('terms');
-      } else if (hash === 'contato') {
+      } else if (target === 'contato') {
         setCurrentRoute('contact');
-      } else if (hash === 'sobre') {
+      } else if (target === 'sobre') {
         setCurrentRoute('about');
-      } else if (hash === 'especialidades') {
+      } else if (target === 'especialidades') {
         setCurrentRoute('specialties');
-      } else if (hash === 'atendimento') {
+      } else if (target === 'atendimento') {
         setCurrentRoute('attendance');
-      } else if (hash === 'faq') {
+      } else if (target === 'faq') {
         setCurrentRoute('faq');
-      } else if (!hash || hash === 'home' || hash === 'inicio') {
+      } else if (!target || target === 'home' || target === 'inicio') {
         setCurrentRoute('home');
       }
     };
@@ -573,7 +722,15 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginAdminWithEmail = async (email: string, pass: string) => {
     try {
-      const user = await loginWithEmailAndPassword(email, pass);
+      const cleanEmail = email.trim().toLowerCase();
+      if (!isAuthorizedAdminEmail(cleanEmail)) {
+        return {
+          success: false,
+          error: 'Acesso não autorizado: este e-mail não possui permissão administrativa.',
+        };
+      }
+
+      const user = await loginWithEmailAndPassword(cleanEmail, pass);
       setAdminUser(user);
 
       if (!user.emailVerified) {
@@ -599,7 +756,16 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const registerNewAdmin = async (email: string, pass: string) => {
     try {
-      const user = await registerAdminWithEmailAndPassword(email, pass);
+      const cleanEmail = email.trim().toLowerCase();
+      if (!isAuthorizedAdminEmail(cleanEmail)) {
+        return {
+          success: false,
+          error:
+            'Cadastro não autorizado: este e-mail não possui permissão prévia para gerenciar este consultório.',
+        };
+      }
+
+      const user = await registerAdminWithEmailAndPassword(cleanEmail, pass);
       setAdminUser(user);
       showToast('Conta criada! Enviamos um link de confirmação para seu e-mail.', 'success');
       return { success: true };
@@ -627,15 +793,17 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const checkVerificationStatus = async () => {
     try {
       const user = await reloadAdminUser();
-      setAdminUser(user);
-      if (user && user.emailVerified) {
-        const now = Date.now();
-        sessionStorage.setItem(SESSION_STORAGE_KEY, now.toString());
-        setSessionStartTime(now);
-        setSessionRemainingSeconds(MAX_SESSION_SECONDS);
-        setIsSessionWarningOpen(false);
-        showToast('E-mail confirmado com sucesso! Acesso administrativo liberado.', 'success');
-        return true;
+      if (user && isAuthorizedAdminEmail(user.email)) {
+        setAdminUser(user);
+        if (user.emailVerified) {
+          const now = Date.now();
+          sessionStorage.setItem(SESSION_STORAGE_KEY, now.toString());
+          setSessionStartTime(now);
+          setSessionRemainingSeconds(MAX_SESSION_SECONDS);
+          setIsSessionWarningOpen(false);
+          showToast('E-mail confirmado com sucesso! Acesso administrativo liberado.', 'success');
+          return true;
+        }
       }
       return false;
     } catch {
@@ -645,7 +813,15 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const sendPasswordReset = async (email: string) => {
     try {
-      await sendAdminPasswordReset(email);
+      const cleanEmail = email.trim().toLowerCase();
+      if (!isAuthorizedAdminEmail(cleanEmail)) {
+        return {
+          success: false,
+          error: 'E-mail não autorizado para recuperação administrativa.',
+        };
+      }
+
+      await sendAdminPasswordReset(cleanEmail);
       showToast('Se este e-mail estiver cadastrado, enviaremos instruções para redefinir sua senha.', 'info');
       return { success: true };
     } catch (error: any) {
@@ -676,6 +852,7 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logoutAdmin = async () => {
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(SESSION_ADMIN_DATA_KEY);
     setSessionStartTime(null);
     setSessionRemainingSeconds(0);
     setIsSessionWarningOpen(false);
@@ -685,6 +862,13 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Logout notice:', e);
     }
     setAdminUser(null);
+    setData((prev) => ({
+      ...prev,
+      patients: [],
+      appointments: [],
+      privateActivities: [],
+      messages: [],
+    }));
     setCurrentRoute('admin');
     window.location.hash = 'admin';
     showToast('Você saiu do painel administrativo.', 'info');
@@ -981,11 +1165,14 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }),
       read: false,
     };
-    setData((prev) => ({
-      ...prev,
-      messages: [newMsg, ...prev.messages],
-      lastUpdated: new Date().toISOString(),
-    }));
+    createMessageRecord(newMsg).catch((e) => console.warn('Message send notice:', e));
+    if (isAdminLoggedIn) {
+      setData((prev) => ({
+        ...prev,
+        messages: [newMsg, ...prev.messages],
+        lastUpdated: new Date().toISOString(),
+      }));
+    }
     showToast('Mensagem enviada com sucesso! Retornaremos em breve.', 'success');
   };
 
@@ -1303,7 +1490,22 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Data management
   const resetToDefaultData = () => {
     setData(INITIAL_SITE_DATA);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_SITE_DATA));
+    try {
+      const publicSlice: PublicSiteData = {
+        profile: INITIAL_SITE_DATA.profile,
+        config: INITIAL_SITE_DATA.config,
+        specialties: INITIAL_SITE_DATA.specialties,
+        attendance: INITIAL_SITE_DATA.attendance,
+        steps: INITIAL_SITE_DATA.steps,
+        faq: INITIAL_SITE_DATA.faq,
+        testimonials: INITIAL_SITE_DATA.testimonials,
+        posts: INITIAL_SITE_DATA.posts,
+        lastUpdated: new Date().toISOString(),
+      };
+      localStorage.setItem(PUBLIC_STORAGE_KEY, JSON.stringify(publicSlice));
+      localStorage.removeItem('psicologia_site_data_v2');
+      sessionStorage.removeItem(SESSION_ADMIN_DATA_KEY);
+    } catch {}
     showToast('Dados restaurados para o padrão demonstrativo.', 'info');
   };
 
@@ -1315,13 +1517,39 @@ export const SiteProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const parsed = JSON.parse(jsonString);
       if (parsed.profile && parsed.config && parsed.specialties) {
-        setData({
+        const fullData: SiteData = {
           ...INITIAL_SITE_DATA,
           ...parsed,
           patients: parsed.patients || [],
           appointments: parsed.appointments || [],
           privateActivities: parsed.privateActivities || [],
-        });
+          messages: parsed.messages || [],
+        };
+        setData(fullData);
+
+        if (isAdminLoggedIn) {
+          const publicSlice: PublicSiteData = {
+            profile: fullData.profile,
+            config: fullData.config,
+            specialties: fullData.specialties,
+            attendance: fullData.attendance,
+            steps: fullData.steps,
+            faq: fullData.faq,
+            testimonials: fullData.testimonials,
+            posts: fullData.posts,
+            lastUpdated: fullData.lastUpdated,
+          };
+          const privateSlice: AdminPrivateData = {
+            patients: fullData.patients,
+            appointments: fullData.appointments,
+            privateActivities: fullData.privateActivities,
+            messages: fullData.messages,
+            lastUpdated: fullData.lastUpdated,
+          };
+          savePublicDataToCloud(publicSlice).catch(() => {});
+          saveAdminDataToCloud(privateSlice).catch(() => {});
+        }
+
         showToast('Dados importados com sucesso!', 'success');
         return true;
       }
