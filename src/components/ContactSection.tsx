@@ -147,7 +147,7 @@ export const ContactSection: React.FC = () => {
               )}
 
               {/* Physical Address */}
-              {contact.address && (
+              {Boolean(contact.showPhysicalAddress) && contact.address && (
                 <div className="flex items-start gap-3.5">
                   <div className="w-10 h-10 rounded-2xl bg-[#FFF8EA] text-[#C88A12] flex items-center justify-center shrink-0 border border-[#E8DACB]">
                     <MapPin className="w-5 h-5" />

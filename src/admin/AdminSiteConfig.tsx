@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSite } from '../context/SiteContext';
 import { SiteConfig, ThemeColor } from '../types';
 import { THEME_CONFIGS } from '../utils/theme';
@@ -14,11 +14,19 @@ import {
   LayoutTemplate,
   ShieldCheck,
   Check,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 export const AdminSiteConfig: React.FC = () => {
   const { data, updateConfig } = useSite();
   const [configState, setConfigState] = useState<SiteConfig>(data.config);
+
+  useEffect(() => {
+    if (data?.config) {
+      setConfigState(data.config);
+    }
+  }, [data.config]);
 
   const themeKeys: ThemeColor[] = ['sage', 'sand', 'terracotta', 'lavender', 'ocean'];
 
@@ -36,7 +44,7 @@ export const AdminSiteConfig: React.FC = () => {
     }));
   };
 
-  const handleContactChange = (field: string, value: string) => {
+  const handleContactChange = (field: string, value: any) => {
     setConfigState((prev) => ({
       ...prev,
       contact: { ...prev.contact, [field]: value },
@@ -320,6 +328,57 @@ export const AdminSiteConfig: React.FC = () => {
                 className="w-full px-4 py-2.5 rounded-xl bg-[#FAF9F6] border border-[#E5E0D8] text-sm text-[#1F2923]"
               />
             </div>
+          </div>
+
+          {/* Controle de Visibilidade do Endereço Físico */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-[#FAF9F6] border border-[#E5E0D8] flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-2">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div
+                className={`p-2.5 rounded-xl shrink-0 transition-colors ${
+                  configState.contact.showPhysicalAddress
+                    ? 'bg-[#EFF3F0] text-[#4E6B58]'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
+              >
+                {configState.contact.showPhysicalAddress ? (
+                  <Eye className="w-5 h-5" />
+                ) : (
+                  <EyeOff className="w-5 h-5" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <span className="font-semibold text-sm sm:text-base text-[#1F2923]">
+                    Exibir endereço físico no site público
+                  </span>
+                  <span
+                    className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full transition-colors ${
+                      configState.contact.showPhysicalAddress
+                        ? 'bg-[#EFF3F0] text-[#4E6B58] border border-[#4E6B58]/20'
+                        : 'bg-gray-100 text-gray-500 border border-gray-200'
+                    }`}
+                  >
+                    {configState.contact.showPhysicalAddress ? 'ON • Visível' : 'OFF • Oculto'}
+                  </span>
+                </div>
+                <p className="text-xs text-[#718096] mt-1 max-w-xl leading-relaxed">
+                  {configState.contact.showPhysicalAddress
+                    ? 'O endereço físico, bairro, cidade/estado e o link do Google Maps do consultório estão visíveis no site público.'
+                    : 'O endereço físico, bairro, cidade/estado e o link do Google Maps do consultório estão ocultos no site público (ideal para atendimento 100% online). Os dados continuam salvos abaixo para uso futuro.'}
+                </p>
+              </div>
+            </div>
+
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 self-start sm:self-center">
+              <input
+                type="checkbox"
+                checked={Boolean(configState.contact.showPhysicalAddress)}
+                onChange={(e) => handleContactChange('showPhysicalAddress', e.target.checked)}
+                className="sr-only peer"
+                aria-label="Exibir endereço físico no site público"
+              />
+              <div className="w-14 h-8 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-2 peer-focus:ring-[#4E6B58]/30 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:start-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-[#4E6B58]"></div>
+            </label>
           </div>
 
           <div>

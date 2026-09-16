@@ -94,6 +94,7 @@ export interface SiteConfig {
     googleMapsUrl?: string;
     businessHours: string;
     emergencyNotice: string;
+    showPhysicalAddress?: boolean;
   };
   seo: {
     siteTitle: string;

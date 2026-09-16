@@ -159,7 +159,7 @@ export const Footer: React.FC = () => {
                   <span>{config.contact.email}</span>
                 </p>
               )}
-              {config.contact.address && (
+              {Boolean(config.contact.showPhysicalAddress) && config.contact.address && (
                 <p className="flex items-start gap-2">
                   <MapPin className="w-4 h-4 text-[#C88A12] shrink-0 mt-0.5" />
                   <span>{config.contact.address} - {config.contact.city}/{config.contact.state}</span>

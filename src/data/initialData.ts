@@ -149,6 +149,7 @@ export const INITIAL_SITE_DATA: SiteData = {
       googleMapsUrl: 'https://maps.google.com/?q=Av.+Paulista,+1842+-+Bela+Vista,+São+Paulo+-+SP',
       businessHours: 'Segunda a Sexta: 08h às 20h | Sábado: 08h às 13h',
       emergencyNotice: 'Em caso de crise emergencial imediata, ligue para o CVV no número 188 (ligação gratuita, 24 horas) ou procure o pronto-socorro mais próximo.',
+      showPhysicalAddress: false,
     },
     seo: {
       siteTitle: 'Dra. Helena Martins | Psicóloga Clínica em São Paulo & Online',

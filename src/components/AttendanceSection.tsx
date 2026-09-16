@@ -124,15 +124,17 @@ export const AttendanceSection: React.FC = () => {
                   {attendance.inPerson.description}
                 </p>
 
-                <div className="p-4 rounded-xl bg-[#FFFDF8] border border-[#E8DACB] mb-6 text-xs text-[#5A4535]">
-                  <p className="font-semibold text-[#33251A] mb-1 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-[#C88A12]" />
-                    Localização do Consultório:
-                  </p>
-                  <p className="text-sm font-medium text-[#33251A] mt-1">
-                    {attendance.inPerson.address || config.contact.address}
-                  </p>
-                </div>
+                {Boolean(config.contact.showPhysicalAddress) && (attendance.inPerson.address || config.contact.address) && (
+                  <div className="p-4 rounded-xl bg-[#FFFDF8] border border-[#E8DACB] mb-6 text-xs text-[#5A4535]">
+                    <p className="font-semibold text-[#33251A] mb-1 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-[#C88A12]" />
+                      Localização do Consultório:
+                    </p>
+                    <p className="text-sm font-medium text-[#33251A] mt-1">
+                      {attendance.inPerson.address || config.contact.address}
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-3 mb-8">
                   <p className="text-xs font-bold uppercase tracking-wider text-[#B97808]">

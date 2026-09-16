@@ -366,10 +366,15 @@ export const PublicConsultationPage: React.FC = () => {
                     <p className="leading-relaxed">
                       💻 O link exclusivo da videochamada será enviado no WhatsApp da psicóloga próximo ao horário da sessão. Certifique-se de estar em um local silencioso e privativo.
                     </p>
-                  ) : (
+                  ) : Boolean(data.config.contact.showPhysicalAddress) && data.config.contact.address ? (
                     <p className="leading-relaxed flex items-start gap-1.5">
                       <MapPin className="w-4 h-4 text-[#C88A12] shrink-0 mt-0.5" />
                       <span>{data.config.contact.address} ({data.config.contact.city} - {data.config.contact.state})</span>
+                    </p>
+                  ) : (
+                    <p className="leading-relaxed flex items-start gap-1.5 text-[#5A4535]">
+                      <MapPin className="w-4 h-4 text-[#C88A12] shrink-0 mt-0.5" />
+                      <span>Atendimento presencial (endereço e orientações de acesso informados diretamente pela psicóloga).</span>
                     </p>
                   )}
                 </div>
